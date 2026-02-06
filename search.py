@@ -11,7 +11,7 @@ cursor = db.cursor()
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = SentenceTransformer("BAAI/bge-base-en-v1.5", device=device)
-query = "Brazilian pop masterpiece"
+query = "Hardcore dreamy trip hop"
 query_embedded = model.encode(query, convert_to_numpy=True, normalize_embeddings=True)
 neighbour_count = 8
 
