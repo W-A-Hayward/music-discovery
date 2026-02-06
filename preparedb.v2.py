@@ -1,82 +1,122 @@
+# This script is a modified version of the original script preparedb.py
+# It is needed to prepare the database for accurate and fast vector embedding and search
+# We use the GPU to chunk the reviews text and generate the tags in parallel.
+
 import sqlite3
 import asyncio
 import time
 from ollama import AsyncClient
 
-# Database setup
+# Database & Model Config
 DB_PATH = 'database.sqlite'
-MODEL_NAME = "qwen2.5:14b"
-BATCH_SIZE = 4  
+MODEL_NAME = "qwen2.5:7b"
+BATCH_SIZE = 10 
+CHUNK_SIZE = 1200
+OVERLAP = 200
 
-async def summarize_review(client, text):
-    """Summarizes text, handling long reviews by chunking."""
-    if len(text) > 6000:
-        # Simple chunking for very long reviews
-        text = text[:6000] # For speed, we'll just trim to the 'meat' of the review
-        
-    prompt = f"Analyze this music review. Return 100 word a comma-separated list of: Genres and sub-genres, Emotions, and Key Instruments. Add a 50 word summary of the review at the end. Review: {text}"
-    
+async def get_tags(client, text):
+    """Fetches tags for a specific text segment."""
+    prompt = (
+        "Summarize the music review segment below. "
+        "Return ONLY a comma-separated list of: Emotions, Feelings, Instruments, and effects. "
+        f"Review segment: {text}"
+    )
     try:
         response = await client.generate(
             model=MODEL_NAME, 
             prompt=prompt, 
-            options={"temperature": 0, "num_ctx": 8192}
+            options={"temperature": 0, "num_ctx": 4096}
         )
-        return response['response']
+        return response['response'].strip()
     except Exception as e:
-        return f"Error: {str(e)}"
+        print(f"Error calling Ollama: {e}")
+        return None
+
+async def get_tags_handler(client, text):
+    """Splits text into chunks and returns tags + start positions."""
+    all_chunks_results = []
+    chunk_start_indexes = []
+
+    # If text is long, chunk it
+    if len(text) > CHUNK_SIZE:
+        step = max(1, CHUNK_SIZE - OVERLAP)
+        for i in range(0, len(text), step):
+            chunk = text[i : i + CHUNK_SIZE]
+            if len(chunk) < 100 and i > 0: break
+            
+            tags = await get_tags(client, chunk)
+            if tags:
+                all_chunks_results.append(tags)
+                chunk_start_indexes.append(i)
+    else:
+        # For small reviews, just do one chunk starting at index 0
+        tags = await get_tags(client, text)
+        if tags:
+            all_chunks_results.append(tags)
+            chunk_start_indexes.append(0)
+
+    return all_chunks_results, chunk_start_indexes
 
 async def process_review(client, db, row):
-    """Processes a single review: AI Gen -> DB Update."""
-    print(f"Processing review of len {len(row[1])}")
+    """Generates tags and saves chunk text + tags to the database."""
     review_id, content = row
-    tags = await summarize_review(client, content)
     
-    # Use a standard synchronous update since SQLite is fast
-    cursor = db.cursor()
-    cursor.execute("UPDATE content SET tags = ? WHERE reviewid = ?", (tags, review_id))
-    db.commit()
+    # Unpack tags and their corresponding starting positions
+    tags_list, start_indexes = await get_tags_handler(client, content)
+    
+    if tags_list:
+        # Prepare all chunk rows for this review for a bulk insert
+        db_rows = []
+        for tags, start_idx in zip(tags_list, start_indexes):
+            chunk_text = content[start_idx : start_idx + CHUNK_SIZE]
+            db_rows.append((review_id, tags, chunk_text))
+        
+        # Fast bulk insert
+        cursor = db.cursor()
+        cursor.executemany(
+            "INSERT INTO review_tags (reviewid, tags, chunk) VALUES (?, ?, ?)", 
+            db_rows
+        )
+        db.commit()
+    
     return review_id
+
+def stream_reviews(db, batch_size):
+    """Generator to pull unprocessed reviews in batches."""
+    cursor = db.cursor()
+    query = """
+        SELECT reviewid, content FROM content 
+        WHERE reviewid NOT IN (SELECT DISTINCT reviewid FROM review_tags)
+    """
+    cursor.execute(query)
+    while True:
+        rows = cursor.fetchmany(batch_size)
+        if not rows: break
+        yield rows
 
 async def main():
     db = sqlite3.connect(DB_PATH)
     client = AsyncClient()
-    count = 0
+    total_processed = 0
     
-    print(f"--- Starting Parallel Processing (Batch Size: {BATCH_SIZE}) ---")
+    print(f"--- 6800 XT Batch Processing Started ---")
     
     try:
-        while True:
-            # Wait for a bit to let the GPU cool down
-            await asyncio.sleep(10)
-
-            # 1. Fetch a batch of reviews that haven't been tagged yet
-            cursor = db.cursor()
-            cursor.execute(
-                "SELECT reviewid, content FROM content WHERE tags IS NULL LIMIT ?", 
-                (BATCH_SIZE,)
-            )
-            rows = cursor.fetchall()
-            
-            if not rows:
-                print("All reviews processed!")
-                break
-            
+        for batch in stream_reviews(db, BATCH_SIZE):
             start_time = time.perf_counter()
             
-            # 2. Run the whole batch in parallel on the GPU
-            tasks = [process_review(client, db, row) for row in rows]
-            completed_ids = await asyncio.gather(*tasks)
+            # Parallel process the batch
+            tasks = [process_review(client, db, row) for row in batch]
+            await asyncio.gather(*tasks)
             
             elapsed = time.perf_counter() - start_time
-            print(f"Batch {completed_ids} finished in {elapsed:.2f}s ({(len(rows)/elapsed):.2f} reviews/sec)")
-            count += 4
+            total_processed += len(batch)
+            print(f"Batch Done | Total: {total_processed} | {len(batch)/elapsed:.2f} reviews/s")
+            
     except KeyboardInterrupt:
         print("\n[!] Stopping safely...")
     finally:
-        db.commit()
         db.close()
-        print("Database closed.")
 
 if __name__ == "__main__":
     asyncio.run(main())
