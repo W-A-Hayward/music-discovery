@@ -2,6 +2,7 @@
 
 A semantic search system for music reviews using vector embeddings and SQLite.
 The aim of this project is to help users discover new music based on other people's reviews, agnostic of styles or genres.
+This project is using a dataset of PitchFork reviews, which can be found on [Kaggle](https://www.kaggle.com/datasets/nolanbconaway/pitchfork-data).
 
 ## Overview
 
