@@ -14,7 +14,7 @@ This project enables semantic search over music reviews by:
 
 ## Features
 
-- Vector embeddings of music reviews using `BAAI/bge-base-en-v1.5`
+- Vector embeddings of music reviews using `qwen2.5:7b`
 - Semantic search with k-NN queries
 - AI-generated tags (genres, emotions, instruments) using Ollama
 - GPU acceleration support (CUDA/ROCm)
