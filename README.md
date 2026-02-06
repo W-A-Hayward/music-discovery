@@ -35,8 +35,8 @@ This project enables semantic search over music reviews by:
 
 ## Todo
 
-- [x] Embed reviews into vectors and insert into virtual table (DONE)
-- [x] Implement a search function that takes an input and returns the k nearest neighbours (DONE)
-- [x] Add tags for each review using ollama model to improve accuracy (DONE)
+- [x] Embed reviews into vectors and insert into virtual table
+- [x] Implement a search function that takes an input and returns the k nearest neighbours
+- [x] Add tags for each review using ollama model to improve accuracy
 - [ ] Chunk reviews into smaller chunks to further improve accuracy
 
