@@ -1,6 +1,7 @@
 # Music Discovery
 
 A semantic search system for music reviews using vector embeddings and SQLite.
+The aim of this project is to help users discover new music based on other people's reviews, agnostic of styles or genres.
 
 ## Overview
 
